@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            height: 100%;
+            width: 100%;
+        }
+
+        video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+    </style>
+</head>
+
+<body>
+    <video id="live" autoplay playsinline muted></video>
+    <script>
+        const video = document.getElementById('live')
+        const mime = 'video/webm; codecs="vp8"'
+        let mediaSource = null
+        let sourceBuffer = null
+        let queue = []
+        let ws = null
+
+        function resetMedia() {
+            if (sourceBuffer) {
+                try {
+                    if (mediaSource?.readyState === 'open') {
+                        mediaSource.removeSourceBuffer(sourceBuffer)
+                    }
+                } catch (e) {
+                    console.warn('Error removing SourceBuffer:', e)
+                }
+                sourceBuffer = null
+            }
+
+            if (mediaSource) {
+                mediaSource.removeEventListener('sourceopen', onSourceOpen)
+                mediaSource = null
+            }
+
+            video.removeAttribute('src')
+            video.load()
+            queue = []
+
+            initMediaSource()
+        }
+
+        function initMediaSource() {
+            mediaSource = new MediaSource()
+            video.src = URL.createObjectURL(mediaSource)
+            mediaSource.addEventListener('sourceopen', onSourceOpen)
+        }
+
+        function onSourceOpen() {
+            if (mediaSource.sourceBuffers.length > 0) return
+
+            try {
+                sourceBuffer = mediaSource.addSourceBuffer(mime)
+            } catch (e) {
+                console.error('Failed to create SourceBuffer:', e)
+                return
+            }
+
+            sourceBuffer.mode = 'segments'
+
+            sourceBuffer.addEventListener('updateend', () => {
+                if (queue.length > 0 && !sourceBuffer.updating) {
+                    sourceBuffer.appendBuffer(queue.shift())
+                }
+            })
+        }
+
+        function setupWebSocket() {            
+            ws = new WebSocket('wss://cojmar.go.ro:3000/view')
+            ws.binaryType = 'arraybuffer'
+
+            ws.onopen = () => {
+                console.log('Viewer connected')
+            }
+
+            ws.onmessage = e => {
+                if (typeof e.data === 'string') {
+                    if (e.data === 'restart') {
+                        console.warn('Restart command received — resetting media pipeline...')
+                        resetMedia()
+                    }
+                    return
+                }
+
+                if (!sourceBuffer || mediaSource.readyState !== 'open') {
+                    queue.push(new Uint8Array(e.data))
+                    return
+                }
+
+                const chunk = new Uint8Array(e.data)
+
+                if (sourceBuffer.updating || queue.length > 0) {
+                    queue.push(chunk)
+                } else {
+                    try {
+                        sourceBuffer.appendBuffer(chunk)
+                    } catch (err) {
+                        console.error('appendBuffer failed:', err)
+                        queue.length = 0
+                    }
+                }
+            }
+
+            ws.onclose = () => {
+                console.warn('WebSocket closed. No automatic reload.')
+            }
+
+            ws.onerror = e => {
+                console.error('WebSocket error:', e)
+            }
+        }
+
+        setupWebSocket()
+        initMediaSource()
+    </script>
+</body>
+
+</html>
