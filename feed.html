@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Camera Streaming</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            margin: 0;
+            font-family: sans-serif;
+            background: #f9f9f9;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: auto;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .top-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        select,
+        button {
+            padding: 10px;
+            font-size: 1rem;
+            flex: 1;
+        }
+
+        video {
+            width: 100%;
+            height: auto;
+            background: #000;
+            margin-bottom: 15px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .button-group button {
+            flex: 1 1 120px;
+            max-width: 200px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h2 style="text-align: center">Camera Feed</h2>
+        <div class="top-bar">
+            <select id="cameraSelector">
+                <option disabled selected>Select Camera</option>
+            </select>
+            <button id="shareScreenBtn">Share Screen</button>
+        </div>
+        <video id="camera" autoplay playsinline></video>
+        <div class="button-group">
+            <button id="startBtn">Start Recording</button>
+            <button id="stopBtn" disabled>Stop Recording</button>
+            <button id="previewBtn" onclick="window.open('/', '_blank')">Preview</button>
+        </div>
+    </div>
+    <script>
+        let mediaRecorder, ws, currentStream
+        const startBtn = document.getElementById('startBtn')
+        const stopBtn = document.getElementById('stopBtn')
+        const cameraVideo = document.getElementById('camera')
+        const cameraSelector = document.getElementById('cameraSelector')
+        const shareScreenBtn = document.getElementById('shareScreenBtn')
+
+        async function requestCameraPermission() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+                console.log('Camera access granted')
+                startCamera(stream)
+            } catch (err) {
+                alert('Camera permission is required')
+            }
+        }
+        window.addEventListener('load', requestCameraPermission)
+
+        async function setupCameraSelector() {
+            const devices = await navigator.mediaDevices.enumerateDevices()
+            const videoDevices = devices.filter(d => d.kind === 'videoinput')
+            videoDevices.forEach(device => {
+                const option = document.createElement('option')
+                option.value = device.deviceId
+                option.textContent = device.label || `Camera ${cameraSelector.length + 1}`
+                cameraSelector.appendChild(option)
+            })
+            cameraSelector.addEventListener('change', () => {
+                const deviceId = cameraSelector.value
+                startCamera(deviceId)
+            })
+        }
+
+        async function startCamera(deviceIdOrStream) {
+            if (deviceIdOrStream instanceof MediaStream) {
+                currentStream = deviceIdOrStream
+            } else {
+                currentStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceIdOrStream } } })
+            }
+            cameraVideo.srcObject = currentStream
+        }
+
+        async function startScreenShare() {
+            try {
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+                cameraVideo.srcObject = stream
+                currentStream = stream
+            } catch (err) {
+                console.error('Error sharing screen:', err)
+            }
+        }
+
+        setupCameraSelector()
+
+        function setupWebSocket() {            
+            ws = new WebSocket('wss://cojmar.go.ro:3000')
+            ws.onclose = () => console.log('WebSocket closed')
+            ws.onmessage = message => {
+                if (message.data === 'client') {
+                    // return console.log('cleint')
+                    ws.close()
+                    setTimeout(f => startStream())
+                }
+
+            }
+        }
+
+        async function startStream() {
+            if (!currentStream) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+                    startCamera(stream)
+                } catch (err) {
+                    alert('Camera permission is required')
+                    return
+                }
+            }
+
+            setupWebSocket()
+            const options = { mimeType: 'video/webm;codecs=vp8' }
+            mediaRecorder?.stop()
+            try {
+                mediaRecorder = new MediaRecorder(currentStream, options)
+            } catch {
+                mediaRecorder = new MediaRecorder(currentStream)
+            }
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                    ws.send(e.data)
+                }
+            }
+
+            mediaRecorder.start(100)
+            startBtn.disabled = true
+            stopBtn.disabled = false
+        }
+        startBtn.onclick = startStream
+
+        stopBtn.onclick = () => {
+            mediaRecorder?.stop()
+            ws?.close()
+            startBtn.disabled = false
+            stopBtn.disabled = true
+        }
+
+        shareScreenBtn.onclick = startScreenShare
+    </script>
+</body>
+
+</html>
