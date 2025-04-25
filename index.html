@@ -31,7 +31,8 @@
     <video id="live" autoplay playsinline muted></video>
     <script>
         const video = document.getElementById('live')
-        const mime = 'video/webm; codecs="vp8"'
+        let mime = 'video/webm;codecs=vp8,opus'
+        // mime = 'video/webm; codecs="vp8"'
         let mediaSource = null
         let sourceBuffer = null
         let queue = []
@@ -86,7 +87,8 @@
             })
         }
 
-        function setupWebSocket() {            
+        function setupWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://'
             ws = new WebSocket('wss://cojmar.go.ro:3000/view')
             ws.binaryType = 'arraybuffer'
 
@@ -130,6 +132,9 @@
                 console.error('WebSocket error:', e)
             }
         }
+        document.addEventListener('click', f => {
+            video.muted = false
+        })
 
         setupWebSocket()
         initMediaSource()
