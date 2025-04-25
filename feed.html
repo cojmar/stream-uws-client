@@ -8,7 +8,8 @@
         body {
             margin: 0;
             font-family: sans-serif;
-            background: #f9f9f9;
+            background: #000;
+            color: #eee;
         }
 
         .container {
@@ -31,6 +32,16 @@
             padding: 10px;
             font-size: 1rem;
             flex: 1;
+            background: #111;
+            color: #eee;
+            border: 1px solid #333;
+            outline: none;
+            cursor: pointer;
+        }
+
+        select:focus,
+        button:focus {
+            border-color: #555;
         }
 
         video {
@@ -38,6 +49,7 @@
             height: auto;
             background: #000;
             margin-bottom: 15px;
+            border: 1px solid #333;
         }
 
         .button-group {
@@ -50,41 +62,77 @@
         .button-group button {
             flex: 1 1 120px;
             max-width: 200px;
+            background: #111;
+            color: #eee;
+            border: 1px solid #333;
+        }
+
+        .button-group button:disabled {
+            background: #222;
+            color: #666;
+            border-color: #444;
+        }
+
+        h2 {
+            color: #fff;
         }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h2 style="text-align: center">Camera Feed</h2>
         <div class="top-bar">
             <select id="cameraSelector">
                 <option disabled selected>Select Camera</option>
             </select>
             <button id="shareScreenBtn">Share Screen</button>
         </div>
-        <video id="camera" autoplay playsinline></video>
+
         <div class="button-group">
-            <button id="startBtn">Start Recording</button>
-            <button id="stopBtn" disabled>Stop Recording</button>
-            <button id="previewBtn" onclick="window.open('/', '_blank')">Preview</button>
+            <button id="startBtn">Start Stream</button>
+            <button id="hideBtn">Hide</button>
+            <button id="previewBtn" onclick="window.open('/', '_blank')">Open Viewer</button>
         </div>
+        <video id="camera" autoplay playsinline muted></video>
     </div>
     <script>
         let mediaRecorder, ws, currentStream
         const startBtn = document.getElementById('startBtn')
-        const stopBtn = document.getElementById('stopBtn')
+        const hideBtn = document.getElementById('hideBtn')
         const cameraVideo = document.getElementById('camera')
         const cameraSelector = document.getElementById('cameraSelector')
         const shareScreenBtn = document.getElementById('shareScreenBtn')
 
+        if ('wakeLock' in navigator) {
+            let wakeLock = null;
+
+            async function requestWakeLock() {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    wakeLock.addEventListener('release', () => {
+                        console.log('Screen wake lock released');
+                    });
+                } catch (err) {
+                    console.error('Failed to acquire wake lock', err);
+                }
+            }
+
+            // Request wake lock when the page is loaded or during a user interaction
+            document.addEventListener('DOMContentLoaded', () => {
+                requestWakeLock();
+            });
+        } else {
+            console.log('Screen Wake Lock API is not supported by your browser');
+        }
+
+
         async function requestCameraPermission() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-                console.log('Camera access granted')
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                console.log('Camera and mic access granted')
                 startCamera(stream)
             } catch (err) {
-                alert('Camera permission is required')
+                alert('Camera and microphone permission is required')
             }
         }
         window.addEventListener('load', requestCameraPermission)
@@ -92,56 +140,91 @@
         async function setupCameraSelector() {
             const devices = await navigator.mediaDevices.enumerateDevices()
             const videoDevices = devices.filter(d => d.kind === 'videoinput')
+
+            const backOption = document.createElement('option')
+            backOption.value = 'back-camera'
+            backOption.textContent = 'Back Camera'
+            cameraSelector.appendChild(backOption)
+
             videoDevices.forEach(device => {
                 const option = document.createElement('option')
                 option.value = device.deviceId
                 option.textContent = device.label || `Camera ${cameraSelector.length + 1}`
                 cameraSelector.appendChild(option)
             })
+
             cameraSelector.addEventListener('change', () => {
-                const deviceId = cameraSelector.value
-                startCamera(deviceId)
+                const selected = cameraSelector.value
+                if (selected === 'back-camera') {
+                    startCamera('back-camera')
+                } else {
+                    startCamera(selected)
+                }
             })
         }
 
-        async function startCamera(deviceIdOrStream) {
-            if (deviceIdOrStream instanceof MediaStream) {
-                currentStream = deviceIdOrStream
+        async function startCamera(deviceIdOrLabel) {
+            if (deviceIdOrLabel instanceof MediaStream) {
+                currentStream = deviceIdOrLabel
             } else {
-                currentStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceIdOrStream } } })
+                if (currentStream) {
+                    currentStream.getTracks().forEach(track => track.stop())
+                }
+
+                let constraints
+                if (deviceIdOrLabel === 'back-camera') {
+                    constraints = { video: { facingMode: { exact: 'environment' } }, audio: true }
+                } else {
+                    constraints = { video: { deviceId: { exact: deviceIdOrLabel } }, audio: true }
+                }
+
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints)
             }
+
             cameraVideo.srcObject = currentStream
         }
 
         async function startScreenShare() {
             try {
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
-                cameraVideo.srcObject = stream
-                currentStream = stream
+                const videoStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+                currentStream = videoStream
+                cameraVideo.srcObject = currentStream
             } catch (err) {
                 console.error('Error sharing screen:', err)
             }
         }
 
+
         setupCameraSelector()
 
-        function setupWebSocket() {            
-            ws = new WebSocket('wss://cojmar.go.ro:3000')
+        function setupWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://'
+            ws = new WebSocket(`wss://cojmar.go.ro:3000`)
             ws.onclose = () => console.log('WebSocket closed')
             ws.onmessage = message => {
                 if (message.data === 'client') {
-                    // return console.log('cleint')
                     ws.close()
-                    setTimeout(f => startStream())
+                    setTimeout(() => startStream(), 700)
                 }
+            }
+        }
 
+        function hide() {
+            if (hideBtn.innerHTML === "Hide") {
+                document.querySelector('.top-bar').style.display = startBtn.style.display = 'none'
+                cameraVideo.style.opacity = 0.01
+                hideBtn.innerHTML = "Show"
+            } else {
+                document.querySelector('.top-bar').style.display = startBtn.style.display = 'block'
+                hideBtn.innerHTML = "Hide"
+                cameraVideo.style.opacity = 1
             }
         }
 
         async function startStream() {
-            if (!currentStream) {
+            if (!cameraVideo.srcObject) {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
                     startCamera(stream)
                 } catch (err) {
                     alert('Camera permission is required')
@@ -150,12 +233,14 @@
             }
 
             setupWebSocket()
-            const options = { mimeType: 'video/webm;codecs=vp8' }
+            const videoStream = currentStream || cameraVideo.captureStream()
+            const options = { mimeType: 'video/webm;codecs=vp8,opus' }
             mediaRecorder?.stop()
+
             try {
-                mediaRecorder = new MediaRecorder(currentStream, options)
+                mediaRecorder = new MediaRecorder(videoStream, options)
             } catch {
-                mediaRecorder = new MediaRecorder(currentStream)
+                mediaRecorder = new MediaRecorder(videoStream)
             }
 
             mediaRecorder.ondataavailable = (e) => {
@@ -165,18 +250,22 @@
             }
 
             mediaRecorder.start(100)
-            startBtn.disabled = true
-            stopBtn.disabled = false
-        }
-        startBtn.onclick = startStream
-
-        stopBtn.onclick = () => {
-            mediaRecorder?.stop()
-            ws?.close()
-            startBtn.disabled = false
-            stopBtn.disabled = true
         }
 
+        startBtn.onclick = () => {
+            if (startBtn.innerHTML === "Start Stream") {
+                startStream()
+                startBtn.innerHTML = "Stop Stream"
+                hide()
+            }
+            else {
+                mediaRecorder?.stop()
+                ws?.close()
+                startBtn.innerHTML = "Start Stream"
+            }
+        }
+
+        hideBtn.onclick = hide
         shareScreenBtn.onclick = startScreenShare
     </script>
 </body>
